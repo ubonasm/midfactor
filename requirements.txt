@@ -26,6 +26,6 @@ https://github.com/explosion/spacy-models/releases/download/ja_core_news_sm-3.8.
 # ここから追加
 # networkx==3.4.2
 # scikit-learn==1.6.1
-# plotly==6.1.0
+plotly==6.1.0
 # pyvis==0.3.2
 # pillow==11.2.1
