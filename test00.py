@@ -198,6 +198,20 @@ def get_dict_download_link(dict_data, filename="concept_dictionary.txt"):
     href = f'<a href="data:file/txt;base64,{b64}" download="{filename}">概念辞書をダウンロード</a>'
     return href
 
+def get_pattern_download_link(filename="patterns.txt"):
+    """パターン設定をテキストファイルとしてダウンロードするためのリンクを生成"""
+    content = "# 具体例パターン\n"
+    for pattern in example_patterns:
+        content += pattern + "\n"
+    
+    content += "\n# アイデア・思い・構想パターン\n"
+    for pattern in idea_patterns:
+        content += pattern + "\n"
+    
+    b64 = base64.b64encode(content.encode()).decode()
+    href = f'<a href="data:file/txt;base64,{b64}" download="{filename}">パターン設定をダウンロード</a>'
+    return href
+
 # サイドバーの設定
 st.sidebar.header("設定")
 
@@ -238,6 +252,46 @@ st.sidebar.code(dict_format_example, language="text")
 if st.sidebar.button("現在の概念辞書をダウンロード"):
     st.sidebar.markdown(get_dict_download_link(concept_dict), unsafe_allow_html=True)
 
+# パターン設定のアップロード
+st.sidebar.subheader("パターン設定のアップロード")
+pattern_file = st.sidebar.file_uploader("パターン設定ファイルをアップロード", type=["txt"])
+
+if pattern_file is not None:
+    try:
+        pattern_content = pattern_file.getvalue().decode("utf-8")
+        
+        # パターン設定を解析
+        new_example_patterns = []
+        new_idea_patterns = []
+        current_section = None
+        
+        for line in pattern_content.split('\n'):
+            line = line.strip()
+            if not line or line.startswith('#'):
+                if "具体例" in line:
+                    current_section = "example"
+                elif "アイデア" in line or "思い" in line or "構想" in line:
+                    current_section = "idea"
+                continue
+            
+            if current_section == "example":
+                new_example_patterns.append(line)
+            elif current_section == "idea":
+                new_idea_patterns.append(line)
+        
+        if new_example_patterns:
+            example_patterns = new_example_patterns
+        if new_idea_patterns:
+            idea_patterns = new_idea_patterns
+            
+        st.sidebar.success("パターン設定を読み込みました。")
+    except Exception as e:
+        st.sidebar.error(f"パターン設定の読み込み中にエラーが発生しました: {e}")
+
+# 現在のパターン設定をダウンロード
+if st.sidebar.button("現在のパターン設定をダウンロード"):
+    st.sidebar.markdown(get_pattern_download_link(), unsafe_allow_html=True)
+
 # サンプルデータの表示
 st.sidebar.subheader("サンプルデータ形式")
 sample_data = pd.DataFrame({
@@ -259,6 +313,89 @@ uploaded_file = st.file_uploader("CSVファイルをアップロード", type=["
 # サンプルデータを使用するオプション
 use_sample = st.checkbox("サンプルデータを使用")
 
+# 分析設定
+st.sidebar.subheader("分析設定")
+show_patterns = st.sidebar.checkbox("パターン検出設定を表示")
+
+if show_patterns:
+    st.sidebar.subheader("具体例パターン")
+    example_patterns_text = st.sidebar.text_area("具体例を示す表現パターン（1行に1つ）", 
+                                               "\n".join(p for p in example_patterns))
+    
+    st.sidebar.subheader("アイデアパターン")
+    idea_patterns_text = st.sidebar.text_area("アイデア・思い・構想を示す表現パターン（1行に1つ）", 
+                                            "\n".join(p for p in idea_patterns))
+    
+    if st.sidebar.button("パターン設定を更新"):
+        example_patterns = [p.strip() for p in example_patterns_text.split("\n") if p.strip()]
+        idea_patterns = [p.strip() for p in idea_patterns_text.split("\n") if p.strip()]
+        st.sidebar.success("パターン設定を更新しました。")
+
+# 分析オプション
+st.sidebar.subheader("分析オプション")
+enable_context_analysis = st.sidebar.checkbox("文脈分析を有効にする", value=True)
+bracket_overlap_strategy = st.sidebar.radio(
+    "ブラケット重複時の戦略",
+    ["優先順位（具体例 > 概念 > アイデア）", "最長一致", "重複を許可（入れ子）"]
+)
+
+# 分析結果の統計
+def show_analysis_stats(df):
+    if 'analyzed' not in st.session_state:
+        st.session_state.analyzed = True
+        
+        total_utterances = len(df)
+        example_count = sum(1 for text in df['分析済み発言内容'] if '[' in text)
+        concept_count = sum(1 for text in df['分析済み発言内容'] if '（' in text)
+        idea_count = sum(1 for text in df['分析済み発言内容'] if '〈' in text)
+        
+        st.subheader("分析統計")
+        col1, col2, col3, col4 = st.columns(4)
+        
+        with col1:
+            st.metric("総発言数", total_utterances)
+        with col2:
+            st.metric("具体例 [　]", example_count, f"{example_count/total_utterances:.1%}")
+        with col3:
+            st.metric("概念 （　）", concept_count, f"{concept_count/total_utterances:.1%}")
+        with col4:
+            st.metric("アイデア 〈　〉", idea_count, f"{idea_count/total_utterances:.1%}")
+        
+        # 発言者別の統計
+        if '発言者' in df.columns:
+            st.subheader("発言者別の分析")
+            speaker_stats = {}
+            
+            for speaker in df['発言者'].unique():
+                speaker_df = df[df['発言者'] == speaker]
+                speaker_total = len(speaker_df)
+                speaker_example = sum(1 for text in speaker_df['分析済み発言内容'] if '[' in text)
+                speaker_concept = sum(1 for text in speaker_df['分析済み発言内容'] if '（' in text)
+                speaker_idea = sum(1 for text in speaker_df['分析済み発言内容'] if '〈' in text)
+                
+                speaker_stats[speaker] = {
+                    "総発言数": speaker_total,
+                    "具体例": speaker_example,
+                    "概念": speaker_concept,
+                    "アイデア": speaker_idea
+                }
+            
+            speaker_df = pd.DataFrame(speaker_stats).T
+            st.dataframe(speaker_df)
+            
+            # 発言者別のグラフ
+            st.subheader("発言者別のブラケット分布")
+            speaker_chart_data = pd.DataFrame({
+                "発言者": list(speaker_stats.keys()) * 3,
+                "ブラケット種類": ["具体例"] * len(speaker_stats) + ["概念"] * len(speaker_stats) + ["アイデア"] * len(speaker_stats),
+                "発言数": [stats["具体例"] for stats in speaker_stats.values()] + 
+                         [stats["概念"] for stats in speaker_stats.values()] + 
+                         [stats["アイデア"] for stats in speaker_stats.values()]
+            })
+            
+            st.bar_chart(speaker_chart_data, x="発言者", y="発言数", color="ブラケット種類")
+
+# メイン処理
 if uploaded_file is not None:
     # アップロードされたファイルを処理
     try:
@@ -271,6 +408,9 @@ if uploaded_file is not None:
             st.subheader("分析結果")
             st.dataframe(analyzed_df)
             st.markdown(get_csv_download_link(analyzed_df), unsafe_allow_html=True)
+            
+            # 分析統計を表示
+            show_analysis_stats(analyzed_df)
             
             # 詳細な分析結果の表示
             st.subheader("発言内容の詳細分析")
@@ -297,6 +437,9 @@ elif use_sample:
         st.dataframe(analyzed_df)
         st.markdown(get_csv_download_link(analyzed_df, "sample_analyzed_data.csv"), unsafe_allow_html=True)
         
+        # 分析統計を表示
+        show_analysis_stats(analyzed_df)
+        
         # 詳細な分析結果の表示
         st.subheader("発言内容の詳細分析")
         for idx, row in analyzed_df.iterrows():
@@ -311,20 +454,24 @@ elif use_sample:
 else:
     st.info("CSVファイルをアップロードするか、サンプルデータを使用してください。")
 
-# 分析設定
-st.sidebar.subheader("分析設定")
-show_patterns = st.sidebar.checkbox("パターン検出設定を表示")
-
-if show_patterns:
-    st.sidebar.subheader("具体例パターン")
-    example_patterns_text = st.sidebar.text_area("具体例を示す表現パターン（1行に1つ）", 
-                                               "\n".join(p for p in example_patterns))
+# ヘルプセクション
+with st.expander("使い方ガイド"):
+    st.markdown("""
+    ## 授業記録分析ツールの使い方
     
-    st.sidebar.subheader("アイデアパターン")
-    idea_patterns_text = st.sidebar.text_area("アイデア・思い・構想を示す表現パターン（1行に1つ）", 
-                                            "\n".join(p for p in idea_patterns))
+    ### 基本的な使い方
+    1. CSVファイルをアップロードするか、サンプルデータを使用します
+    2. アプリケーションが自動的に発言内容を分析し、適切なブラケットを付けます
+    3. 分析結果を確認し、必要に応じてダウンロードします
     
-    if st.sidebar.button("パターン設定を更新"):
-        example_patterns = [p.strip() for p in example_patterns_text.split("\n") if p.strip()]
-        idea_patterns = [p.strip() for p in idea_patterns_text.split("\n") if p.strip()]
-        st.sidebar.success("パターン設定を更新しました。")
+    ### ブラケットの種類
+    - **[　]** - 具体的な事例（例：「例えば〜」「昨日〜」「〜さんは」など）
+    - **（　）** - 教科・学習内容・社会的概念（概念辞書に基づく）
+    - **〈　〉** - 児童生徒のアイデア・思い・構想（「思います」「考えます」など）
+    
+    ### カスタマイズ
+    - **概念辞書のアップロード**: テキストファイルで概念辞書をカスタマイズできます
+    - **パターン設定**: 具体例やアイデアを検出するためのパターンをカスタマイズできます
+    - **分析オプション**: 文脈分析やブラケット重複時の戦略を設定できます
+    
+    ### 概念辞書のフォーマット
