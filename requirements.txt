@@ -1,6 +1,6 @@
 # requirements.txtファイルの例（リポジトリのルートに配置）
 # LAT35 transcript
-pip==25.1.1
+#npip==25.1.1
 streamlit==1.45.1
 pandas==2.2.3
 spacy==3.7.4
