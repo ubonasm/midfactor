@@ -6,6 +6,10 @@ import json
 import base64
 from io import StringIO
 import os
+import plotly.graph_objects as go
+import plotly.express as px
+from plotly.subplots import make_subplots
+import numpy as np
 
 # アプリのタイトルとスタイル設定
 st.set_page_config(page_title="授業記録分析ツール", layout="wide")
@@ -109,6 +113,47 @@ def parse_concept_dict_file(file_content):
     
     return concept_dict
 
+def get_bracket_type(text):
+    """テキストから最も外側のブラケットタイプを取得"""
+    if text.startswith('[') and text.endswith(']'):
+        return "例示"
+    elif text.startswith('（') and text.endswith('）'):
+        return "概念"
+    elif text.startswith('〈') and text.endswith('〉'):
+        return "構想"
+    else:
+        return "その他"
+
+def decompose_utterance_by_brackets(text):
+    """発言をブラケット種類別に分解"""
+    # ブラケットで囲まれた部分を抽出
+    bracket_segments = {
+        "例示": [],
+        "概念": [],
+        "構想": [],
+        "その他": []
+    }
+    
+    # 各種ブラケットのパターンを検索
+    example_matches = re.findall(r'\[([^\]]+)\]', text)
+    concept_matches = re.findall(r'（([^）]+)）', text)
+    idea_matches = re.findall(r'〈([^〉]+)〉', text)
+    
+    # ブラケットを除去したテキスト
+    clean_text = text
+    clean_text = re.sub(r'\[[^\]]+\]', '', clean_text)
+    clean_text = re.sub(r'（[^）]+）', '', clean_text)
+    clean_text = re.sub(r'〈[^〉]+〉', '', clean_text)
+    clean_text = clean_text.strip()
+    
+    bracket_segments["例示"] = example_matches
+    bracket_segments["概念"] = concept_matches
+    bracket_segments["構想"] = idea_matches
+    if clean_text:
+        bracket_segments["その他"] = [clean_text]
+    
+    return bracket_segments
+
 def analyze_text_with_context(text):
     """文脈を考慮してテキストを分析し、適切なブラケットを付ける"""
     doc = nlp(text)
@@ -165,6 +210,139 @@ def analyze_text_with_context(text):
         result.append(segment)
     
     return "".join(result)
+
+def create_matrix_visualization(df):
+    """マトリクス可視化を作成"""
+    if '分析済み発言内容' not in df.columns:
+        return None
+    
+    # 発言をブラケット種類別に分解
+    matrix_data = []
+    for idx, row in df.iterrows():
+        segments = decompose_utterance_by_brackets(row['分析済み発言内容'])
+        
+        for bracket_type, content_list in segments.items():
+            for content in content_list:
+                matrix_data.append({
+                    '発言番号': row['発言番号'],
+                    '発言者': row['発言者'],
+                    'ブラケット種類': bracket_type,
+                    '内容': content,
+                    '発言順序': idx
+                })
+    
+    if not matrix_data:
+        return None
+    
+    matrix_df = pd.DataFrame(matrix_data)
+    
+    # ピボットテーブルを作成（発言ごとの各ブラケット種類の有無）
+    pivot_df = matrix_df.groupby(['発言順序', '発言番号', '発言者', 'ブラケット種類']).size().reset_index(name='count')
+    pivot_table = pivot_df.pivot_table(
+        index=['発言順序', '発言番号', '発言者'], 
+        columns='ブラケット種類', 
+        values='count', 
+        fill_value=0
+    )
+    
+    # カラムの順序を指定
+    column_order = ['例示', '概念', '構想', 'その他']
+    existing_columns = [col for col in column_order if col in pivot_table.columns]
+    pivot_table = pivot_table[existing_columns]
+    
+    return pivot_table, matrix_df
+
+def plot_interactive_matrix(pivot_table, matrix_df, selected_speakers=None):
+    """インタラクティブなマトリクス可視化を作成"""
+    if pivot_table is None or matrix_df is None:
+        return None
+    
+    # 発言者の色分け用のカラーマップを作成
+    speakers = pivot_table.index.get_level_values('発言者').unique()
+    colors = px.colors.qualitative.Set3[:len(speakers)]
+    speaker_colors = dict(zip(speakers, colors))
+    
+    # 選択された発言者のハイライト
+    if selected_speakers:
+        highlight_mask = pivot_table.index.get_level_values('発言者').isin(selected_speakers)
+    else:
+        highlight_mask = [True] * len(pivot_table)
+    
+    # ヒートマップ用のデータを準備
+    z_data = pivot_table.values
+    y_labels = [f"発言{row[1]} ({row[2]})" for row in pivot_table.index]
+    x_labels = pivot_table.columns.tolist()
+    
+    # 発言者別の色情報を準備
+    speaker_info = [pivot_table.index[i][2] for i in range(len(pivot_table))]
+    
+    # カスタムカラースケールを作成
+    fig = go.Figure()
+    
+    # 各発言者ごとに異なる色でヒートマップを作成
+    for speaker in speakers:
+        speaker_mask = [info == speaker for info in speaker_info]
+        speaker_indices = [i for i, mask in enumerate(speaker_mask) if mask]
+        
+        if not speaker_indices:
+            continue
+        
+        # 選択されているかどうかで透明度を調整
+        opacity = 1.0 if not selected_speakers or speaker in selected_speakers else 0.3
+        
+        # 各ブラケット種類ごとに散布図を作成
+        for j, bracket_type in enumerate(x_labels):
+            for i in speaker_indices:
+                value = z_data[i, j]
+                if value > 0:
+                    fig.add_trace(go.Scatter(
+                        x=[j],
+                        y=[i],
+                        mode='markers',
+                        marker=dict(
+                            size=max(10, value * 20),  # 値に応じてサイズを調整
+                            color=speaker_colors[speaker],
+                            opacity=opacity,
+                            line=dict(width=2, color='black' if speaker in (selected_speakers or []) else 'gray')
+                        ),
+                        name=speaker,
+                        showlegend=speaker_indices[0] == i and j == 0,  # 最初の点のみ凡例に表示
+                        hovertemplate=f"<b>{y_labels[i]}</b><br>" +
+                                    f"ブラケット種類: {bracket_type}<br>" +
+                                    f"出現回数: {value}<br>" +
+                                    "<extra></extra>"
+                    ))
+    
+    # レイアウトを設定
+    fig.update_layout(
+        title="発言内容のブラケット種類別マトリクス",
+        xaxis=dict(
+            title="ブラケット種類",
+            tickmode='array',
+            tickvals=list(range(len(x_labels))),
+            ticktext=x_labels,
+            side='top'
+        ),
+        yaxis=dict(
+            title="発言（時系列順）",
+            tickmode='array',
+            tickvals=list(range(len(y_labels))),
+            ticktext=y_labels,
+            autorange='reversed'  # 上から下へ時系列順
+        ),
+        height=max(600, len(y_labels) * 25),
+        width=800,
+        showlegend=True,
+        legend=dict(
+            orientation="v",
+            yanchor="top",
+            y=1,
+            xanchor="left",
+            x=1.02
+        )
+    )
+    
+    return fig
 
 def process_csv(df):
     """CSVデータを処理し、発言内容にブラケットを付ける"""
@@ -252,57 +430,20 @@ st.sidebar.code(dict_format_example, language="text")
 if st.sidebar.button("現在の概念辞書をダウンロード"):
     st.sidebar.markdown(get_dict_download_link(concept_dict), unsafe_allow_html=True)
 
-# パターン設定のアップロード
-st.sidebar.subheader("パターン設定のアップロード")
-pattern_file = st.sidebar.file_uploader("パターン設定ファイルをアップロード", type=["txt"])
-
-if pattern_file is not None:
-    try:
-        pattern_content = pattern_file.getvalue().decode("utf-8")
-        
-        # パターン設定を解析
-        new_example_patterns = []
-        new_idea_patterns = []
-        current_section = None
-        
-        for line in pattern_content.split('\n'):
-            line = line.strip()
-            if not line or line.startswith('#'):
-                if "具体例" in line:
-                    current_section = "example"
-                elif "アイデア" in line or "思い" in line or "構想" in line:
-                    current_section = "idea"
-                continue
-            
-            if current_section == "example":
-                new_example_patterns.append(line)
-            elif current_section == "idea":
-                new_idea_patterns.append(line)
-        
-        if new_example_patterns:
-            example_patterns = new_example_patterns
-        if new_idea_patterns:
-            idea_patterns = new_idea_patterns
-            
-        st.sidebar.success("パターン設定を読み込みました。")
-    except Exception as e:
-        st.sidebar.error(f"パターン設定の読み込み中にエラーが発生しました: {e}")
-
-# 現在のパターン設定をダウンロード
-if st.sidebar.button("現在のパターン設定をダウンロード"):
-    st.sidebar.markdown(get_pattern_download_link(), unsafe_allow_html=True)
-
 # サンプルデータの表示
 st.sidebar.subheader("サンプルデータ形式")
 sample_data = pd.DataFrame({
-    '発言番号': [1, 2, 3, 4, 5],
-    '発言者': ['教師', '生徒A', '生徒B', '生徒C', '教師'],
+    '発言番号': [1, 2, 3, 4, 5, 6, 7, 8],
+    '発言者': ['教師', '生徒A', '生徒B', '生徒C', '教師', '生徒A', '生徒D', '教師'],
     '発言内容': [
         '今日は三角形の面積について学びましょう。',
         '例えば、この図形の面積はどうやって求めますか？',
         '底辺×高さ÷2だと思います。',
         '昨日、お父さんと一緒に公園で三角形の看板を見ました。',
-        'みなさんの考えを聞かせてください。'
+        'みなさんの考えを聞かせてください。',
+        '私は、もっと簡単な方法があると思います。',
+        '数学は面白いですね。',
+        'それでは次の問題に進みましょう。'
     ]
 })
 st.sidebar.dataframe(sample_data)
@@ -312,32 +453,6 @@ uploaded_file = st.file_uploader("CSVファイルをアップロード", type=["
 
 # サンプルデータを使用するオプション
 use_sample = st.checkbox("サンプルデータを使用")
-
-# 分析設定
-st.sidebar.subheader("分析設定")
-show_patterns = st.sidebar.checkbox("パターン検出設定を表示")
-
-if show_patterns:
-    st.sidebar.subheader("具体例パターン")
-    example_patterns_text = st.sidebar.text_area("具体例を示す表現パターン（1行に1つ）", 
-                                               "\n".join(p for p in example_patterns))
-    
-    st.sidebar.subheader("アイデアパターン")
-    idea_patterns_text = st.sidebar.text_area("アイデア・思い・構想を示す表現パターン（1行に1つ）", 
-                                            "\n".join(p for p in idea_patterns))
-    
-    if st.sidebar.button("パターン設定を更新"):
-        example_patterns = [p.strip() for p in example_patterns_text.split("\n") if p.strip()]
-        idea_patterns = [p.strip() for p in idea_patterns_text.split("\n") if p.strip()]
-        st.sidebar.success("パターン設定を更新しました。")
-
-# 分析オプション
-st.sidebar.subheader("分析オプション")
-enable_context_analysis = st.sidebar.checkbox("文脈分析を有効にする", value=True)
-bracket_overlap_strategy = st.sidebar.radio(
-    "ブラケット重複時の戦略",
-    ["優先順位（具体例 > 概念 > アイデア）", "最長一致", "重複を許可（入れ子）"]
-)
 
 # 分析結果の統計
 def show_analysis_stats(df):
@@ -360,40 +475,6 @@ def show_analysis_stats(df):
             st.metric("概念 （　）", concept_count, f"{concept_count/total_utterances:.1%}")
         with col4:
             st.metric("アイデア 〈　〉", idea_count, f"{idea_count/total_utterances:.1%}")
-        
-        # 発言者別の統計
-        if '発言者' in df.columns:
-            st.subheader("発言者別の分析")
-            speaker_stats = {}
-            
-            for speaker in df['発言者'].unique():
-                speaker_df = df[df['発言者'] == speaker]
-                speaker_total = len(speaker_df)
-                speaker_example = sum(1 for text in speaker_df['分析済み発言内容'] if '[' in text)
-                speaker_concept = sum(1 for text in speaker_df['分析済み発言内容'] if '（' in text)
-                speaker_idea = sum(1 for text in speaker_df['分析済み発言内容'] if '〈' in text)
-                
-                speaker_stats[speaker] = {
-                    "総発言数": speaker_total,
-                    "具体例": speaker_example,
-                    "概念": speaker_concept,
-                    "アイデア": speaker_idea
-                }
-            
-            speaker_df = pd.DataFrame(speaker_stats).T
-            st.dataframe(speaker_df)
-            
-            # 発言者別のグラフ
-            st.subheader("発言者別のブラケット分布")
-            speaker_chart_data = pd.DataFrame({
-                "発言者": list(speaker_stats.keys()) * 3,
-                "ブラケット種類": ["具体例"] * len(speaker_stats) + ["概念"] * len(speaker_stats) + ["アイデア"] * len(speaker_stats),
-                "発言数": [stats["具体例"] for stats in speaker_stats.values()] + 
-                         [stats["概念"] for stats in speaker_stats.values()] + 
-                         [stats["アイデア"] for stats in speaker_stats.values()]
-            })
-            
-            st.bar_chart(speaker_chart_data, x="発言者", y="発言数", color="ブラケット種類")
 
 # メイン処理
 if uploaded_file is not None:
@@ -412,10 +493,68 @@ if uploaded_file is not None:
             # 分析統計を表示
             show_analysis_stats(analyzed_df)
             
+            # マトリクス可視化
+            st.subheader("📊 マトリクス可視化")
+            
+            # 発言者選択機能
+            if '発言者' in analyzed_df.columns:
+                all_speakers = analyzed_df['発言者'].unique().tolist()
+                selected_speakers = st.multiselect(
+                    "ハイライトする発言者を選択（複数選択可）",
+                    options=all_speakers,
+                    default=None,
+                    help="選択した発言者の発言がハイライトされます。何も選択しない場合は全ての発言者が表示されます。"
+                )
+                
+                if not selected_speakers:
+                    selected_speakers = None
+            else:
+                selected_speakers = None
+            
+            # マトリクス可視化を作成
+            pivot_table, matrix_df = create_matrix_visualization(analyzed_df)
+            
+            if pivot_table is not None:
+                # インタラクティブなマトリクス図を表示
+                matrix_fig = plot_interactive_matrix(pivot_table, matrix_df, selected_speakers)
+                if matrix_fig:
+                    st.plotly_chart(matrix_fig, use_container_width=True)
+                
+                # マトリクスデータの詳細表示
+                with st.expander("マトリクスデータの詳細"):
+                    st.subheader("ブラケット種類別の発言分解")
+                    
+                    # フィルタリング機能
+                    if selected_speakers:
+                        filtered_matrix_df = matrix_df[matrix_df['発言者'].isin(selected_speakers)]
+                    else:
+                        filtered_matrix_df = matrix_df
+                    
+                    # ブラケット種類でフィルタリング
+                    bracket_filter = st.selectbox(
+                        "ブラケット種類でフィルタリング",
+                        options=['全て'] + filtered_matrix_df['ブラケット種類'].unique().tolist()
+                    )
+                    
+                    if bracket_filter != '全て':
+                        filtered_matrix_df = filtered_matrix_df[filtered_matrix_df['ブラケット種類'] == bracket_filter]
+                    
+                    st.dataframe(filtered_matrix_df)
+                    
+                    # 統計情報
+                    st.subheader("ブラケット種類別統計")
+                    bracket_stats = filtered_matrix_df.groupby('ブラケット種類').size().reset_index(name='出現回数')
+                    st.bar_chart(bracket_stats.set_index('ブラケット種類'))
+            else:
+                st.warning("マトリクス可視化用のデータが見つかりませんでした。")
+            
             # 詳細な分析結果の表示
             st.subheader("発言内容の詳細分析")
             for idx, row in analyzed_df.iterrows():
-                with st.expander(f"発言 {row['発言番号']} - {row['発言者']}"):
+                # 選択された発言者のハイライト
+                is_highlighted = selected_speakers is None or row['発言者'] in selected_speakers
+                
+                with st.expander(f"{'🔸' if is_highlighted else '⚪'} 発言 {row['発言番号']} - {row['発言者']}"):
                     col1, col2 = st.columns(2)
                     with col1:
                         st.markdown("**元の発言内容:**")
@@ -423,6 +562,14 @@ if uploaded_file is not None:
                     with col2:
                         st.markdown("**分析済み発言内容:**")
                         st.write(row['分析済み発言内容'])
+                    
+                    # ブラケット分解の表示
+                    segments = decompose_utterance_by_brackets(row['分析済み発言内容'])
+                    st.markdown("**ブラケット種類別分解:**")
+                    for bracket_type, content_list in segments.items():
+                        if content_list:
+                            st.markdown(f"- **{bracket_type}**: {', '.join(content_list)}")
+                            
     except Exception as e:
         st.error(f"エラーが発生しました: {e}")
 
@@ -440,10 +587,68 @@ elif use_sample:
         # 分析統計を表示
         show_analysis_stats(analyzed_df)
         
+        # マトリクス可視化
+        st.subheader("📊 マトリクス可視化")
+        
+        # 発言者選択機能
+        if '発言者' in analyzed_df.columns:
+            all_speakers = analyzed_df['発言者'].unique().tolist()
+            selected_speakers = st.multiselect(
+                "ハイライトする発言者を選択（複数選択可）",
+                options=all_speakers,
+                default=None,
+                help="選択した発言者の発言がハイライトされます。何も選択しない場合は全ての発言者が表示されます。"
+            )
+            
+            if not selected_speakers:
+                selected_speakers = None
+        else:
+            selected_speakers = None
+        
+        # マトリクス可視化を作成
+        pivot_table, matrix_df = create_matrix_visualization(analyzed_df)
+        
+        if pivot_table is not None:
+            # インタラクティブなマトリクス図を表示
+            matrix_fig = plot_interactive_matrix(pivot_table, matrix_df, selected_speakers)
+            if matrix_fig:
+                st.plotly_chart(matrix_fig, use_container_width=True)
+            
+            # マトリクスデータの詳細表示
+            with st.expander("マトリクスデータの詳細"):
+                st.subheader("ブラケット種類別の発言分解")
+                
+                # フィルタリング機能
+                if selected_speakers:
+                    filtered_matrix_df = matrix_df[matrix_df['発言者'].isin(selected_speakers)]
+                else:
+                    filtered_matrix_df = matrix_df
+                
+                # ブラケット種類でフィルタリング
+                bracket_filter = st.selectbox(
+                    "ブラケット種類でフィルタリング",
+                    options=['全て'] + filtered_matrix_df['ブラケット種類'].unique().tolist()
+                )
+                
+                if bracket_filter != '全て':
+                    filtered_matrix_df = filtered_matrix_df[filtered_matrix_df['ブラケット種類'] == bracket_filter]
+                
+                st.dataframe(filtered_matrix_df)
+                
+                # 統計情報
+                st.subheader("ブラケット種類別統計")
+                bracket_stats = filtered_matrix_df.groupby('ブラケット種類').size().reset_index(name='出現回数')
+                st.bar_chart(bracket_stats.set_index('ブラケット種類'))
+        else:
+            st.warning("マトリクス可視化用のデータが見つかりませんでした。")
+        
         # 詳細な分析結果の表示
         st.subheader("発言内容の詳細分析")
         for idx, row in analyzed_df.iterrows():
-            with st.expander(f"発言 {row['発言番号']} - {row['発言者']}"):
+            # 選択された発言者のハイライト
+            is_highlighted = selected_speakers is None or row['発言者'] in selected_speakers
+            
+            with st.expander(f"{'🔸' if is_highlighted else '⚪'} 発言 {row['発言番号']} - {row['発言者']}"):
                 col1, col2 = st.columns(2)
                 with col1:
                     st.markdown("**元の発言内容:**")
@@ -451,7 +656,12 @@ elif use_sample:
                 with col2:
                     st.markdown("**分析済み発言内容:**")
                     st.write(row['分析済み発言内容'])
+                
+                # ブラケット分解の表示
+                segments = decompose_utterance_by_brackets(row['分析済み発言内容'])
+                st.markdown("**ブラケット種類別分解:**")
+                for bracket_type, content_list in segments.items():
+                    if content_list:
+                        st.markdown(f"- **{bracket_type}**: {', '.join(content_list)}")
 else:
     st.info("CSVファイルをアップロードするか、サンプルデータを使用してください。")
-
-
