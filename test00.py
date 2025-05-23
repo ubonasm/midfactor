@@ -178,7 +178,7 @@ def process_csv(df):
         return None
     
     # 発言内容を分析
-    df['分析済み発言内容'] = df['発言��容'].apply(analyze_text_with_context)
+    df['分析済み発言内容'] = df['発言内容'].apply(analyze_text_with_context)
     
     return df
 
