@@ -1,7 +1,7 @@
 # requirements.txtファイルの例（リポジトリのルートに配置）
 # LAT35 transcript
 pip==25.0
-streamlit==1.45.0
+streamlit==1.45.1
 pandas==2.2.3
 spacy==3.8.5
 # https://github.com/explosion/spacy-models/releases/download/ja_core_news_sm-3.8.0/ja_core_news_sm-3.8.0-py3-none-any.whl
