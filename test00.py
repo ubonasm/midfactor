@@ -178,7 +178,7 @@ def process_csv(df):
         return None
     
     # 発言内容を分析
-    df['分析済み発言内容'] = df['発言内容'].apply(analyze_text_with_context)
+    df['分析済み発言内容'] = df['発言��容'].apply(analyze_text_with_context)
     
     return df
 
@@ -290,13 +290,35 @@ def prepare_matrix_data(df):
 # マトリクス可視化を作成する関数
 def create_matrix_visualization(matrix_df, selected_speakers=None):
     """マトリクス可視化を作成する"""
+    if matrix_df.empty:
+        # 空のデータフレームの場合は空のグラフを返す
+        fig = go.Figure()
+        fig.update_layout(
+            title="データがありません",
+            xaxis=dict(title="ブラケット種類"),
+            yaxis=dict(title="発言番号"),
+            height=400
+        )
+        return fig
+    
+    # 発言者が選択されていない場合は全ての発言者を選択
     if selected_speakers is None or len(selected_speakers) == 0:
-        selected_speakers = matrix_df['発言者'].unique()
+        selected_speakers = matrix_df['発言者'].unique().tolist()
     
     # 発言者ごとに色を割り当て
     speakers = matrix_df['発言者'].unique()
-    colors = px.colors.qualitative.Plotly[:len(speakers)]
-    color_map = {speaker: color for speaker, color in zip(speakers, colors)}
+    
+    # 色のリストを作成（必要な数だけ）
+    color_list = px.colors.qualitative.Plotly + px.colors.qualitative.D3 + px.colors.qualitative.G10
+    # 色が足りない場合はランダムな色を生成
+    while len(color_list) < len(speakers):
+        r = random.randint(0, 255)
+        g = random.randint(0, 255)
+        b = random.randint(0, 255)
+        color_list.append(f"rgb({r},{g},{b})")
+    
+    # 色マップを作成
+    color_map = {speaker: color_list[i % len(color_list)] for i, speaker in enumerate(speakers)}
     
     # 選択された発言者のデータのみをフィルタリング
     filtered_df = matrix_df.copy()
@@ -307,7 +329,7 @@ def create_matrix_visualization(matrix_df, selected_speakers=None):
     )
     
     # マーカーサイズの調整
-    max_size = filtered_df['テキスト数'].max()
+    max_size = filtered_df['テキスト数'].max() if not filtered_df.empty else 1
     filtered_df['マーカーサイズ'] = filtered_df['テキスト数'].apply(
         lambda x: max(10, min(30, 10 + (x / max_size) * 20))
     )
@@ -335,13 +357,16 @@ def create_matrix_visualization(matrix_df, selected_speakers=None):
     for speaker in non_selected['発言者'].unique():
         speaker_df = non_selected[non_selected['発言者'] == speaker]
         
+        # 色マップにない発言者の場合はデフォルト色を使用
+        speaker_color = color_map.get(speaker, "gray")
+        
         fig.add_trace(go.Scatter(
             x=speaker_df['ブラケット種類'],
             y=speaker_df['発言番号'],
             mode='markers+text',
             marker=dict(
                 size=speaker_df['マーカーサイズ'],
-                color=color_map[speaker],
+                color=speaker_color,
                 opacity=0.3,
                 line=dict(width=0)
             ),
@@ -358,13 +383,16 @@ def create_matrix_visualization(matrix_df, selected_speakers=None):
     for speaker in selected['発言者'].unique():
         speaker_df = selected[selected['発言者'] == speaker]
         
+        # 色マップにない発言者の場合はデフォルト色を使用
+        speaker_color = color_map.get(speaker, "blue")
+        
         fig.add_trace(go.Scatter(
             x=speaker_df['ブラケット種類'],
             y=speaker_df['発言番号'],
             mode='markers+text',
             marker=dict(
                 size=speaker_df['マーカーサイズ'],
-                color=color_map[speaker],
+                color=speaker_color,
                 opacity=1.0,
                 line=dict(width=1, color='black')
             ),
@@ -388,7 +416,7 @@ def create_matrix_visualization(matrix_df, selected_speakers=None):
             title="発言番号",
             autorange="reversed"  # 発言番号を上から下に表示
         ),
-        height=max(500, min(1000, len(filtered_df['発言番号'].unique()) * 30)),
+        height=max(500, min(1000, len(filtered_df['発言番号'].unique()) * 30)) if not filtered_df.empty else 400,
         margin=dict(l=50, r=50, t=80, b=50),
         hovermode='closest',
         legend=dict(
@@ -420,7 +448,7 @@ if dict_file is not None:
         else:
             st.sidebar.warning("有効な概念辞書が見つかりませんでした。デフォルト辞書を使用します。")
     except Exception as e:
-        st.sidebar.error(f"辞書の読み込み中にエラーが発生しました: {e}")
+        st.sidebar.error(f"辞書の読み込み中にエラーが発生しました: {str(e)}")
         st.sidebar.info("デフォルト辞書を使用します。")
 
 # 概念辞書のフォーマット例を表示
@@ -477,7 +505,7 @@ if pattern_file is not None:
             
         st.sidebar.success("パターン設定を読み込みました。")
     except Exception as e:
-        st.sidebar.error(f"パターン設定の読み込み中にエラーが発生しました: {e}")
+        st.sidebar.error(f"パターン設定の読み込み中にエラーが発生しました: {str(e)}")
 
 # 現在のパターン設定をダウンロード
 if st.sidebar.button("現在のパターン設定をダウンロード"):
@@ -546,11 +574,11 @@ def show_analysis_stats(df):
         with col1:
             st.metric("総発言数", total_utterances)
         with col2:
-            st.metric("具体例 [　]", example_count, f"{example_count/total_utterances:.1%}")
+            st.metric("具体例 [　]", example_count, f"{example_count/total_utterances:.1%}" if total_utterances > 0 else "0%")
         with col3:
-            st.metric("概念 （　）", concept_count, f"{concept_count/total_utterances:.1%}")
+            st.metric("概念 （　）", concept_count, f"{concept_count/total_utterances:.1%}" if total_utterances > 0 else "0%")
         with col4:
-            st.metric("アイデア 〈　〉", idea_count, f"{idea_count/total_utterances:.1%}")
+            st.metric("アイデア 〈　〉", idea_count, f"{idea_count/total_utterances:.1%}" if total_utterances > 0 else "0%")
         
         # 発言者別の統計
         if '発言者' in df.columns:
@@ -651,27 +679,31 @@ else:
 if analyzed_df is not None:
     st.header("マトリクス可視化")
     
-    # マトリクスデータの準備
-    matrix_df = prepare_matrix_data(analyzed_df)
-    
-    # 発言者選択
-    speakers = analyzed_df['発言者'].unique()
-    selected_speakers = st.multiselect(
-        "発言者を選択（複数選択可）",
-        options=speakers,
-        default=speakers
-    )
-    
-    # マトリクス可視化の表示
-    if not matrix_df.empty:
-        matrix_fig = create_matrix_visualization(matrix_df, selected_speakers)
-        st.plotly_chart(matrix_fig, use_container_width=True)
+    try:
+        # マトリクスデータの準備
+        matrix_df = prepare_matrix_data(analyzed_df)
         
-        # マトリクスデータの詳細表示
-        with st.expander("マトリクスデータの詳細"):
-            st.dataframe(matrix_df)
-    else:
-        st.warning("マトリクス可視化用のデータがありません。")
+        if not matrix_df.empty:
+            # 発言者選択
+            speakers = analyzed_df['発言者'].unique().tolist()
+            selected_speakers = st.multiselect(
+                "発言者を選択（複数選択可）",
+                options=speakers,
+                default=speakers
+            )
+            
+            # マトリクス可視化の表示
+            matrix_fig = create_matrix_visualization(matrix_df, selected_speakers)
+            st.plotly_chart(matrix_fig, use_container_width=True)
+            
+            # マトリクスデータの詳細表示
+            with st.expander("マトリクスデータの詳細"):
+                st.dataframe(matrix_df)
+        else:
+            st.warning("マトリクス可視化用のデータがありません。")
+    except Exception as e:
+        st.error(f"マトリクス可視化中にエラーが発生しました: {str(e)}")
+        st.info("デバッグ情報: マトリクスデータの準備または表示に問題があります。")
 
 # ヘルプセクション
 with st.expander("使い方ガイド"):
