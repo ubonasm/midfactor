@@ -3,7 +3,7 @@
 pip==25.1.1
 streamlit==1.45.1
 pandas==2.2.3
-spacy==3.8.2
+spacy==3.7.4
 # https://github.com/explosion/spacy-models/releases/download/ja_core_news_sm-3.8.0/ja_core_news_sm-3.8.0-py3-none-any.whl
 # https://github.com/explosion/spacy-models/releases/download/ja_core_news_md-3.8.0/ja_core_news_md-3.8.0-py3-none-any.whl
 # https://github.com/explosion/spacy-models/releases/download/ja_core_news_lg-3.8.0/ja_core_news_lg-3.8.0-py3-none-any.whl
